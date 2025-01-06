@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 from pydantic import BaseModel, EmailStr, Field
+from peewee import CharField, DateTimeField
+from datetime import datetime
 
 
 # class UserSchema(BaseModel):
@@ -35,3 +37,5 @@ class LoginSchema(BaseModel):
                 "password": "password",
             }
         }
+
+
