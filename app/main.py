@@ -3,10 +3,12 @@ from app.config.config import ALL_MODELS, middlewareAPI
 from app.config.database import ConfigDatabase
 from app.users.routes import router_user
 from app.tasks.routes import router_task
+from dotenv import load_dotenv
+
 
 app = FastAPI()
 
-
+load_dotenv()
 app.include_router(router_user)
 app.include_router(router_task)
 middlewareAPI(app)

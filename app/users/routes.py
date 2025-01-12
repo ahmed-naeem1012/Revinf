@@ -65,8 +65,6 @@ conf = ConnectionConfig(
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 DYNADOT_API_KEY = os.getenv("DYNADOT_API_KEY")
 
-
-
 dynadot_client = Dynadot(api_key=DYNADOT_API_KEY)
 
 # class DomainAuthRequest(BaseModel):
@@ -304,7 +302,8 @@ async def auth(user_data: LoginSchema):
 async def get_sendgrid_ips(user_id: int = Header(...)):
     """
     Retrieve all IP addresses from SendGrid, associate them with the provided user ID,
-    replace existing entries in the database, and return all stored IPs for the user.
+    replace or add new entries in the database without duplicating, 
+    and return all stored IP details for the user.
     """
     try:
         # Validate the user_id (Optional: Ensure it exists in the database)
@@ -318,6 +317,7 @@ async def get_sendgrid_ips(user_id: int = Header(...)):
             "Content-Type": "application/json"
         }
         response = requests.get(url, headers=headers)
+        print(SENDGRID_API_KEY)
 
         if response.status_code != 200:
             raise HTTPException(
@@ -328,26 +328,29 @@ async def get_sendgrid_ips(user_id: int = Header(...)):
         # Parse SendGrid response JSON
         ips_data = response.json()
 
-        # Replace existing IPs for the user
-        UserServer.delete().where(UserServer.user == user_id).execute()
-
         for ip_info in ips_data:
             ip_address = ip_info.get("ip")
-            if ip_address: 
-                UserServer.create(user=user_id, ip=ip_address)
+            if ip_address:
+                # Check if the IP already exists for the user
+                existing_entry = UserServer.select().where(
+                    (UserServer.user == user_id) & (UserServer.ip == ip_address)
+                ).first()
 
-        # Retrieve all IPs for the user from UserServer table
+                # If IP doesn't exist, create a new entry
+                if not existing_entry:
+                    UserServer.create(user=user_id, ip=ip_address)
+
+        # Retrieve all IP details for the user from UserServer table
         user_servers = UserServer.select().where(UserServer.user == user_id)
-        ip_list = [server.ip for server in user_servers]
+        ip_list = ips_data
 
         return {
-            "message": "SendGrid IP addresses retrieved and replaced successfully!",
+            "message": "SendGrid IP addresses retrieved and updated successfully!",
             "ips": ip_list
         }
     except Exception as e:
         print(f"Error retrieving SendGrid IPs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @router_user.post("/refresh")
@@ -719,7 +722,8 @@ async def get_user_mailboxes(user_id: int = Header(...)):
 ''
 
 @router_user.post("/new-domain/suggest-details")
-async def fetch_domain_details(query: str):
+async def fetch_domain_details(data: dict):
+    query = data.get("query")
     """
     Fetch domain suggestions and availability details using GoDaddy's API.
     """
