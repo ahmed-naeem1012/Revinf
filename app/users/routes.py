@@ -876,7 +876,7 @@ async def sendgrid_validate_domain(domain_id: str) -> dict:
 #         # SendGrid API endpoint for associating an IP with a domain
 #         sendgrid_url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/ips"
 #         headers = {
-#             "Authorization": f"Bearer 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",  # Replace with actual API key
+#
 #             "Content-Type": "application/json"
 #         }
 #         payload = {"ip": ip}
