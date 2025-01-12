@@ -35,6 +35,18 @@ urllib3.disable_warnings()
 
 
 
+# conf = ConnectionConfig(
+#     MAIL_USERNAME="ahmednaeemlhr1012@gmail.com",
+#     MAIL_PASSWORD="zecx vifq eufp hpfw",
+#     MAIL_FROM="ahmednaeemlhr1012@gmail.com",
+#     MAIL_PORT=587,
+#     MAIL_SERVER="smtp.gmail.com",
+#     MAIL_STARTTLS=True,   # Correct field for STARTTLS
+#     MAIL_SSL_TLS=False,   # Correct field for SSL/TLS
+#     USE_CREDENTIALS=True,
+#     VALIDATE_CERTS=False  # Disable SSL certificate validation
+# )
+
 
 conf = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
@@ -57,11 +69,16 @@ DYNADOT_API_KEY = os.getenv("DYNADOT_API_KEY")
 
 dynadot_client = Dynadot(api_key=DYNADOT_API_KEY)
 
+# class DomainAuthRequest(BaseModel):
+#     domain: str
+#     subdomain: str = "email"  # Default value
+#     custom_spf: bool = True   # Default value
+
 class DomainAuthRequest(BaseModel):
     domain: str
-    subdomain: str = "email"  # Default value
-    custom_spf: bool = True   # Default value
-
+    subdomain: str
+    custom_spf: bool
+    ip: str  # Add this field for the IP address
 
 class DNSRecord(BaseModel):
     type: str
@@ -86,6 +103,7 @@ class DomainSearchResponse(BaseModel):
 
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 SENDGRID_API_URL = "https://api.sendgrid.com/v3/whitelabel/domains"
+SENDGRID_IP_URL_TEMPLATE = "https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/ips"
 
 def create_whitelabel_domain(domain: str, subdomain: str, custom_spf: bool):
     headers = {
@@ -112,6 +130,30 @@ def create_whitelabel_domain(domain: str, subdomain: str, custom_spf: bool):
         )
 
     return response.json()
+def associate_ip_with_domain(domain_id: int, ip: str):
+    """
+    Associate an IP address with a specific domain using SendGrid's API.
+    """
+    try:
+        url = SENDGRID_IP_URL_TEMPLATE.format(domain_id=domain_id)
+        headers = {
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {"ip": ip}
+
+        response = requests.post(url, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"SendGrid IP association error: {response.text}"
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error associating IP: {e}")
+    
 
 
 def validate_whitelabel_domain(domain_id: str):
@@ -139,6 +181,25 @@ def validate_whitelabel_domain(domain_id: str):
     return response.json()
 
 
+
+async def sendgrid_add_ip_to_domain(domain_id: str, ip: str):
+    """
+    Call SendGrid API to associate an IP with a domain.
+    """
+    url = SENDGRID_API_URL.format(domain_id=domain_id)
+    headers = {
+        "Authorization": f"Bearer {SENDGRID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {"ip": ip}
+
+    response = requests.post(url, headers=headers, json=payload)
+
+    if response.status_code == 200:
+        return {"success": True}
+    else:
+        print(f"SendGrid API Error: {response.text}")
+        return {"success": False, "error": response.text}
 
 
 
@@ -302,10 +363,64 @@ async def refresh_tokens(refresh_token: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# @router_user.post("/domains/create", response_model=DomainAuthResponse)
+# async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(...)):
+#     """
+#     Create SendGrid domain authentication, store details in the database,
+#     and return DNS records to the user.
+#     """
+#     try:
+#         # Validate the user_id
+#         if not User.select().where(User.id == user_id).exists():
+#             raise HTTPException(status_code=404, detail="User not found")
+
+#         # Call SendGrid to create the domain authentication
+#         response = create_whitelabel_domain(
+#             domain=request.domain,
+#             subdomain=request.subdomain,
+#             custom_spf=request.custom_spf
+#         )
+
+#         # Extract DNS records from SendGrid response
+#         dns_records = [
+#             DNSRecord(
+#                 type="cname",
+#                 host=response["dns"][key]["host"],
+#                 value=response["dns"][key]["data"],
+#                 ttl=3600  # Default TTL
+#             )
+#             for key in response["dns"]
+#         ]
+
+#         # Store the domain and DNS records in the UserDomains table
+#         try:
+#             UserDomains.create(
+#                 user=user_id,
+#                 domain_id=response["id"],
+#                 domain=request.domain,
+#                 subdomain=request.subdomain,
+#                 custom_spf=request.custom_spf,
+#                 dns_records=response["dns"]  # Store DNS records as JSON
+#             )
+#         except IntegrityError:
+#             raise HTTPException(status_code=400, detail="Domain already exists for this user.")
+
+#         # Return the response to the user
+#         return DomainAuthResponse(
+#             message="Domain authentication created successfully. Configure the following DNS records:",
+#             dns_records=dns_records,
+#             domain_id=str(response["id"])  # Convert integer to string
+#         )
+
+#     except Exception as e:
+#         print(f"Error in whitelabel creation: {e}")  # Log the error
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
 @router_user.post("/domains/create", response_model=DomainAuthResponse)
 async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(...)):
     """
-    Create SendGrid domain authentication, store details in the database,
+    Create SendGrid domain authentication, associate IP, store details in the database,
     and return DNS records to the user.
     """
     try:
@@ -331,15 +446,22 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
             for key in response["dns"]
         ]
 
-        # Store the domain and DNS records in the UserDomains table
+        # Associate the provided IP with the created domain
+        domain_id = response["id"]
+        ip_association_response = associate_ip_with_domain(domain_id, request.ip)
+
+        # Store the domain, DNS records, and IP in the UserDomains table
         try:
+            server, _ = Server.get_or_create(ip_address=request.ip)
+
             UserDomains.create(
                 user=user_id,
-                domain_id=response["id"],
+                domain_id=domain_id,
                 domain=request.domain,
                 subdomain=request.subdomain,
                 custom_spf=request.custom_spf,
-                dns_records=response["dns"]  # Store DNS records as JSON
+                dns_records=response["dns"],  # Store DNS records as JSON
+                server=server  
             )
         except IntegrityError:
             raise HTTPException(status_code=400, detail="Domain already exists for this user.")
@@ -348,14 +470,14 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
         return DomainAuthResponse(
             message="Domain authentication created successfully. Configure the following DNS records:",
             dns_records=dns_records,
-            domain_id=str(response["id"])  # Convert integer to string
+            domain_id=str(domain_id),  # Convert integer to string
+            ip_association_response=ip_association_response  # Include the IP association response
         )
 
     except Exception as e:
         print(f"Error in whitelabel creation: {e}")  # Log the error
         raise HTTPException(status_code=500, detail=str(e))
 
-      
 
 @router_user.get("/user/domains")
 async def get_user_whitelabel_domains(user_id: int = Header(...)):
@@ -552,6 +674,49 @@ async def get_mailboxes(domain_id: str, user_id: int = Header(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router_user.get("/user-mailboxes")
+async def get_user_mailboxes(user_id: int = Header(...)):
+    """
+    Fetch all mailboxes for a specific user.
+    """
+    try:
+        # Validate the user_id
+        user = User.get_or_none(User.id == user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Fetch mailboxes linked to domains owned by the user
+        mailboxes = (Mailbox
+                     .select()
+                     .join(UserDomains, on=(Mailbox.domain == UserDomains.id))
+                     .where(UserDomains.user == user.id))
+        
+        mailbox_list = [
+            {
+                "mailbox_id": mailbox.mailbox_id,
+                "nickname": mailbox.nickname,
+                "from_email": mailbox.from_email,
+                "from_name": mailbox.from_name,
+                "reply_to_email": mailbox.reply_to_email,
+                "reply_to_name": mailbox.reply_to_name,
+                "verified_status": mailbox.verified_status,
+                "created_at": mailbox.created_at,
+                "updated_at": mailbox.updated_at,
+                "domain": mailbox.domain.domain  # Include domain name in the response
+            }
+            for mailbox in mailboxes
+        ]
+
+        return {
+            "message": "Mailboxes retrieved successfully for the user.",
+            "mailboxes": mailbox_list
+        }
+    except Exception as e:
+        print(f"Error retrieving user mailboxes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+''
 
 @router_user.post("/new-domain/suggest-details")
 async def fetch_domain_details(query: str):
@@ -675,3 +840,64 @@ async def fetch_bulk_domain_availability(domains: list[str]):
     except Exception as e:
         print(f"Error in fetch_bulk_domain_availability: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch bulk domain availability")
+
+
+async def sendgrid_validate_domain(domain_id: str) -> dict:
+    """
+    Validate a domain using the SendGrid API.
+    """
+    url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/validate"
+    headers = {
+        "Authorization": f"Bearer YOUR_SENDGRID_API_KEY",
+    }
+
+    response = requests.post(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"SendGrid Validation Error: {response.text}")
+        return {"valid": False, "error": response.text}
+
+
+
+# @router_user.post("/domains/{domain_id}/ips")
+# async def add_ip_to_domain(
+#     domain_id: str,
+#     ip: str = Query(..., description="IP address to associate with the domain"),
+#     user_id: int = Header(..., alias="user-id", description="User ID from the header")
+# ):
+#     """
+#     Associate an IP address with a domain via SendGrid API.
+#     """
+#     try:
+#         # Log received parameters for debugging
+#         print(f"Received domain_id: {domain_id}, ip: {ip}, user_id: {user_id}")
+
+#         # SendGrid API endpoint for associating an IP with a domain
+#         sendgrid_url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/ips"
+#         headers = {
+#             "Authorization": f"Bearer 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",  # Replace with actual API key
+#             "Content-Type": "application/json"
+#         }
+#         payload = {"ip": ip}
+
+#         # Make the POST request to associate the IP with the domain
+#         response = requests.post(sendgrid_url, headers=headers, json=payload)
+
+#         # Check the response status
+#         if response.status_code == 200:
+#             print("SendGrid response:", response.json())
+#             return {
+#                 "message": "IP successfully associated with the domain",
+#                 "sendgrid_response": response.json(),
+#             }
+#         else:
+#             print("SendGrid API error:", response.text)
+#             raise HTTPException(
+#                 status_code=response.status_code,
+#                 detail=f"SendGrid API error: {response.text}"
+#             )
+#     except Exception as e:
+#         print(f"Error associating IP to domain: {e}")
+#         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+

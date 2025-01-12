@@ -23,6 +23,12 @@ class User(BaseModel):
     token_expires_at = DateTimeField(null=True)  
 
 
+class Server(BaseModel):
+    Uder = ForeignKeyField(User, backref="servers", on_delete="CASCADE")
+    ip_address = CharField(unique=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+
+
 
 class OTP(BaseModel):
     user = ForeignKeyField(User, backref="otps", on_delete="CASCADE")
@@ -47,8 +53,8 @@ class UserDomains(BaseModel):
     subdomain = CharField()  
     custom_spf = BooleanField(default=True) 
     dns_records = JSONField()  
+    server_id = ForeignKeyField(Server, backref="domains", null=True, on_delete="SET NULL")  # Link to Server
     created_at = DateTimeField(default=datetime.utcnow) 
-
 
 class Mailbox(BaseModel):
     user = ForeignKeyField(User, backref="mailboxes", on_delete="CASCADE")  
