@@ -74,8 +74,6 @@ dynadot_client = Dynadot(api_key=DYNADOT_API_KEY)
 
 class DomainAuthRequest(BaseModel):
     domain: str
-    subdomain: str
-    custom_spf: bool
     ip: str  # Add this field for the IP address
 
 class DNSRecord(BaseModel):
@@ -431,11 +429,16 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
         if not User.select().where(User.id == user_id).exists():
             raise HTTPException(status_code=404, detail="User not found")
 
+        # Validate the IP by fetching it from the servers table
+        server = UserServer.select().where(UserServer.id == request.ip).first()
+        if not server:
+            raise HTTPException(status_code=404, detail="IP address not found in servers table")
+
         # Call SendGrid to create the domain authentication
         response = create_whitelabel_domain(
             domain=request.domain,
-            subdomain=request.subdomain,
-            custom_spf=request.custom_spf
+            subdomain='mail',
+            custom_spf=True
         )
 
         # Extract DNS records from SendGrid response
@@ -451,20 +454,18 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
 
         # Associate the provided IP with the created domain
         domain_id = response["id"]
-        ip_association_response = associate_ip_with_domain(domain_id, request.ip)
+        ip_association_response = associate_ip_with_domain(domain_id, server.ip)
 
         # Store the domain, DNS records, and IP in the UserDomains table
         try:
-            server, _ = Server.get_or_create(ip_address=request.ip)
-
             UserDomains.create(
                 user=user_id,
                 domain_id=domain_id,
                 domain=request.domain,
-                subdomain=request.subdomain,
-                custom_spf=request.custom_spf,
+                subdomain='mail',
+                custom_spf=True,
                 dns_records=response["dns"],  # Store DNS records as JSON
-                server=server  
+                server=server
             )
         except IntegrityError:
             raise HTTPException(status_code=400, detail="Domain already exists for this user.")
@@ -493,7 +494,7 @@ async def get_user_whitelabel_domains(user_id: int = Header(...)):
             raise HTTPException(status_code=404, detail="User not found")
 
         # Fetch all domains associated with the user
-        user_domains = UserDomains.select().where(UserDomains.user == user_id)
+        user_domains = UserDomains.select().where(UserDomains.user == user_id and UserDomains)
 
         # Check if the user has any domains
         if not user_domains.exists():
