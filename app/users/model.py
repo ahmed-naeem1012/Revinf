@@ -1,10 +1,8 @@
 from app.config.database import BaseModel
-from peewee import CharField, BooleanField
-from peewee import ForeignKeyField, CharField, BooleanField, DateTimeField
+from peewee import CharField, BooleanField, ForeignKeyField, DateTimeField
 import json
 from datetime import datetime, timedelta
 from peewee import TextField
-
 
 
 class JSONField(TextField):
@@ -14,63 +12,80 @@ class JSONField(TextField):
     def python_value(self, value):
         return json.loads(value) if value is not None else None
 
+
 class User(BaseModel):
     first_name = CharField()
     email = CharField(unique=True)
     password = CharField()
-    is_verified = BooleanField(default=False) 
-    verification_token = CharField(null=True) 
-    token_expires_at = DateTimeField(null=True)  
+    is_verified = BooleanField(default=False)
+    verification_token = CharField(null=True)
+    token_expires_at = DateTimeField(null=True)
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
+
+    class Meta:
+        table_name = "users"
 
 
 class Server(BaseModel):
     Uder = ForeignKeyField(User, backref="servers", on_delete="CASCADE")
     ip_address = CharField(unique=True)
-    created_at = DateTimeField(default=datetime.utcnow)
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
 
+    class Meta:
+        table_name = "servers"
 
 
 class OTP(BaseModel):
     user = ForeignKeyField(User, backref="otps", on_delete="CASCADE")
-    code = CharField()  
+    code = CharField()
     expires_at = DateTimeField(default=lambda: datetime.utcnow() + timedelta(minutes=5))
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
+
+    class Meta:
+        table_name = "otps"
 
 
 class UserServer(BaseModel):
     user = ForeignKeyField(User, backref="servers", on_delete="CASCADE")
-    ip = CharField() 
-    created_at = DateTimeField(default=datetime.utcnow)
+    ip = CharField()
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
 
-class Server(BaseModel):
-    ip_address = CharField(unique=True) 
-    created_at = DateTimeField(default=datetime.utcnow) 
+    class Meta:
+        table_name = "user_servers"
 
 
 class UserDomains(BaseModel):
-    user = ForeignKeyField(User, backref="domains", on_delete="CASCADE") 
-    domain_id = CharField(unique=True)  
+    user = ForeignKeyField(User, backref="domains", on_delete="CASCADE")
+    domain_id = CharField(unique=True)
     domain = CharField()
-    subdomain = CharField()  
-    custom_spf = BooleanField(default=True) 
-    dns_records = JSONField()  
+    subdomain = CharField()
+    custom_spf = BooleanField(default=True)
+    dns_records = JSONField()
     server_id = ForeignKeyField(UserServer, backref="domains", null=True, on_delete="SET NULL")  # Link to Server
-    created_at = DateTimeField(default=datetime.utcnow) 
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
+
+    class Meta:
+        table_name = "user_domains"
+
 
 class Mailbox(BaseModel):
-    user = ForeignKeyField(User, backref="mailboxes", on_delete="CASCADE")  
-    domain = ForeignKeyField(UserDomains, backref="mailboxes", on_delete="CASCADE")  
-    mailbox_id = CharField(unique=True)  
-    nickname = CharField()  
-    from_email = CharField() 
-    from_name = CharField()  
-    reply_to_email = CharField()  
-    reply_to_name = CharField()  
-    address = CharField() 
-    address_2 = CharField(null=True)  
-    city = CharField()  
-    state = CharField() 
-    zip_code = CharField()  
-    country = CharField()  
-    verified_status = BooleanField(default=False) 
-    created_at = DateTimeField(default=datetime.utcnow)  
-    updated_at = DateTimeField(default=datetime.utcnow)  
+    user = ForeignKeyField(User, backref="mailboxes", on_delete="CASCADE")
+    domain = ForeignKeyField(UserDomains, backref="mailboxes", on_delete="CASCADE")
+    mailbox_id = CharField(unique=True)
+    nickname = CharField()
+    from_email = CharField()
+    from_name = CharField()
+    reply_to_email = CharField()
+    reply_to_name = CharField()
+    address = CharField()
+    address_2 = CharField(null=True)
+    city = CharField()
+    state = CharField()
+    zip_code = CharField()
+    country = CharField()
+    verified_status = BooleanField(default=False)
+    created_at = DateTimeField(default=datetime.utcnow)  # Added created_at
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    class Meta:
+        table_name = "mailboxes"
