@@ -53,7 +53,7 @@ class UserDomains(BaseModel):
     subdomain = CharField()  
     custom_spf = BooleanField(default=True) 
     dns_records = JSONField()  
-    server_id = ForeignKeyField(Server, backref="domains", null=True, on_delete="SET NULL")  # Link to Server
+    server_id = ForeignKeyField(UserServer, backref="domains", null=True, on_delete="SET NULL")  # Link to Server
     created_at = DateTimeField(default=datetime.utcnow) 
 
 class Mailbox(BaseModel):

@@ -6,10 +6,10 @@ from decouple import config
 class ConfigDatabase:
 
     database = MySQLDatabase(
-        config("DATABASE", default="my_project"),
+        config("DATABASE", default="app"),
         user=config("DATABASE_USERNAME", default="root"),
-        password=config("DATABASE_PASSWORD", default="MySQL@123"),
-        host=config("DATABASE_HOST", default="localhost"),
+        password=config("DATABASE_PASSWORD", default=None),
+        host=config("DATABASE_HOST", default="127.0.0.1"),
         port=int(config("DATABASE_PORT", default=3306)),
     )
 

@@ -62,7 +62,7 @@ conf = ConnectionConfig(
 
 
 
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+SENDGRID_API_KEY = "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"
 DYNADOT_API_KEY = os.getenv("DYNADOT_API_KEY")
 
 dynadot_client = Dynadot(api_key=DYNADOT_API_KEY)
@@ -110,7 +110,7 @@ def create_whitelabel_domain(domain: str, subdomain: str, custom_spf: bool):
         "domain": domain,
         "subdomain": subdomain,
         "custom_spf": custom_spf,
-        "automatic_security": True
+        "automatic_security": False
     }
 
     response = requests.post(SENDGRID_API_URL, headers=headers, json=payload)
@@ -340,14 +340,46 @@ async def get_sendgrid_ips(user_id: int = Header(...)):
 
         # Retrieve all IP details for the user from UserServer table
         user_servers = UserServer.select().where(UserServer.user == user_id)
+        db_ip_list = [{"id" :record.id ,"ip": record.ip, "created_at": record.created_at.isoformat()} for record in user_servers]
+
         ip_list = ips_data
 
         return {
             "message": "SendGrid IP addresses retrieved and updated successfully!",
-            "ips": ip_list
+            "ips": db_ip_list
         }
     except Exception as e:
         print(f"Error retrieving SendGrid IPs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router_user.get("/userserver/{server_id}")
+async def get_single_server(server_id: int, user_id: int = Header(...)):
+    """
+    Retrieve a single server from the database using Server.id.
+    """
+    try:
+        # Validate the user_id
+        if not User.select().where(User.id == user_id).exists():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Fetch the server using the server_id and validate ownership
+        server = UserServer.get_or_none((UserServer.id == server_id) & (UserServer.user == user_id))
+        if not server:
+            raise HTTPException(status_code=404, detail="Server not found or does not belong to the user")
+
+        # Format the server details
+        server_data = {
+            "id": server.id,
+            "ip": server.ip,
+            "created_at": server.created_at.isoformat(),
+        }
+
+        return {
+            "message": "Server retrieved successfully",
+            "server": server_data,
+        }
+    except Exception as e:
+        print(f"Error retrieving server: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -438,19 +470,21 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
         response = create_whitelabel_domain(
             domain=request.domain,
             subdomain='mail',
-            custom_spf=True
+            custom_spf=False
         )
 
-        # Extract DNS records from SendGrid response
-        dns_records = [
-            DNSRecord(
-                type="cname",
-                host=response["dns"][key]["host"],
-                value=response["dns"][key]["data"],
-                ttl=3600  # Default TTL
+
+        # Parse the DNS records from the response
+        dns_records = []
+        for key, record in response["dns"].items():
+            dns_records.append(
+                DNSRecord(
+                    type=record["type"],
+                    host=record["host"],
+                    value=record["data"],
+                    ttl=3600  # Default TTL
+                )
             )
-            for key in response["dns"]
-        ]
 
         # Associate the provided IP with the created domain
         domain_id = response["id"]
@@ -464,18 +498,26 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
                 domain=request.domain,
                 subdomain='mail',
                 custom_spf=True,
-                dns_records=response["dns"],  # Store DNS records as JSON
-                server=server
+                dns_records=response["dns"],  
+                server_id=server.id,
             )
         except IntegrityError:
             raise HTTPException(status_code=400, detail="Domain already exists for this user.")
+
+        # Map the status of DNS validity for a better user response
+        dns_status = {
+            "mail_server": response["dns"]["mail_server"]["valid"],
+            "subdomain_spf": response["dns"]["subdomain_spf"]["valid"],
+            "dkim": response["dns"]["dkim"]["valid"]
+        }
 
         # Return the response to the user
         return DomainAuthResponse(
             message="Domain authentication created successfully. Configure the following DNS records:",
             dns_records=dns_records,
             domain_id=str(domain_id),  # Convert integer to string
-            ip_association_response=ip_association_response  # Include the IP association response
+            ip_association_response=ip_association_response,  # Include the IP association response
+            dns_status=dns_status
         )
 
     except Exception as e:
@@ -484,22 +526,27 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
 
 
 @router_user.get("/user/domains")
-async def get_user_whitelabel_domains(user_id: int = Header(...)):
+async def get_user_whitelabel_domains(user_id: int = Header(...), userserver_id: int = Header(...)):
     """
-    Fetch all whitelabel domain information for the given user ID.
+    Fetch all whitelabel domain information for the given user ID and associated UserServer.
     """
     try:
         # Validate the user_id
         if not User.select().where(User.id == user_id).exists():
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Fetch all domains associated with the user
-        user_domains = UserDomains.select().where(UserDomains.user == user_id and UserDomains)
+        # Validate the userserver_id
+        user_server = UserServer.select().where(UserServer.id == userserver_id, UserServer.user == user_id).first()
+        if not user_server:
+            raise HTTPException(status_code=404, detail="UserServer not found for the given user")
 
-        # Check if the user has any domains
+        # Fetch all domains associated with the given UserServer
+        user_domains = UserDomains.select().where(UserDomains.server_id == userserver_id)
+
+        # Check if the UserServer has any associated domains
         if not user_domains.exists():
             return {
-                "message": "No domains found for the user.",
+                "message": "No domains found for the provided UserServer.",
                 "domains": []
             }
 
@@ -511,6 +558,7 @@ async def get_user_whitelabel_domains(user_id: int = Header(...)):
                 "subdomain": domain.subdomain,
                 "custom_spf": domain.custom_spf,
                 "dns_records": domain.dns_records,
+                "mailbox_count": Mailbox.select().where(Mailbox.domain == domain).count(),
                 "created_at": domain.created_at
             }
             for domain in user_domains
@@ -853,7 +901,7 @@ async def sendgrid_validate_domain(domain_id: str) -> dict:
     """
     url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/validate"
     headers = {
-        "Authorization": f"Bearer YOUR_SENDGRID_API_KEY",
+        "Authorization": f"Bearer {SENDGRID_API_KEY}",
     }
 
     response = requests.post(url, headers=headers)
@@ -906,3 +954,44 @@ async def sendgrid_validate_domain(domain_id: str) -> dict:
 #         print(f"Error associating IP to domain: {e}")
 #         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
 
+@router_user.get("/domains/{domain_id}/validate")
+async def validate_domain_whitelabel(domain_id: str, user_id: int = Header(...)):
+    """
+    Validate a domain whitelabel using SendGrid's API.
+    """
+    try:
+        # Validate the user_id
+        if not User.select().where(User.id == user_id).exists():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Validate the domain_id exists in the database
+        domain = UserDomains.get_or_none(UserDomains.domain_id == domain_id, UserDomains.user == user_id)
+        if not domain:
+            raise HTTPException(status_code=404, detail="Domain not found for the user")
+
+        # Call SendGrid API to validate the domain
+        validate_url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}/validate"
+        headers = {
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        response = requests.post(validate_url, headers=headers)
+
+        # Parse and handle the response
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Error validating domain: {response.text}"
+            )
+
+        validation_result = response.json()
+
+        # Return the validation result
+        return {
+            "message": "Domain validation successful.",
+            "validation_result": validation_result
+        }
+
+    except Exception as e:
+        print(f"Error validating domain: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
