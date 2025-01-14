@@ -340,13 +340,28 @@ async def get_sendgrid_ips(user_id: int = Header(...)):
 
         # Retrieve all IP details for the user from UserServer table
         user_servers = UserServer.select().where(UserServer.user == user_id)
-        db_ip_list = [{"id" :record.id ,"ip": record.ip, "created_at": record.created_at.isoformat()} for record in user_servers]
-
-        ip_list = ips_data
-
+        db_ip_list = [{"id": record.id, "ip": record.ip, "created_at": record.created_at.isoformat()} for record in user_servers]
+        db_ip_map = {record['ip']: record['id'] for record in db_ip_list}
+        ip_list = ips_data 
+        db_ips = {record['ip'] for record in db_ip_list}  # Get the set of IPs from db_ip_list
+        # Filter and map ip_list to only include IPs present in db_ip_list
+        filtered_ip_list = [
+            {
+                "id": db_ip_map[ip_data["ip"]],
+                "ip": ip_data["ip"],
+                "subusers": ip_data.get("subusers", []),
+                "pools": ip_data.get("pools", []),
+                "warmup": ip_data.get("warmup", False),
+                "start_date": ip_data.get("start_date", None),
+                "whitelabeled": ip_data.get("whitelabeled", False),
+                "assigned_at": ip_data.get("assigned_at", None),
+            }
+            for ip_data in ip_list
+           if ip_data["ip"] in db_ips
+        ]
         return {
             "message": "SendGrid IP addresses retrieved and updated successfully!",
-            "ips": db_ip_list
+            "ips": filtered_ip_list
         }
     except Exception as e:
         print(f"Error retrieving SendGrid IPs: {e}")
@@ -994,4 +1009,39 @@ async def validate_domain_whitelabel(domain_id: str, user_id: int = Header(...))
 
     except Exception as e:
         print(f"Error validating domain: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router_user.get("/domains/{domain_id}")
+async def get_domain_by_id(domain_id: str, user_id: int = Header(...)):
+    """
+    Fetch a specific domain record based on domain_id for the logged-in user.
+    """
+    try:
+        # Validate the user_id
+        if not User.select().where(User.id == user_id).exists():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Fetch the domain record
+        domain = UserDomains.get_or_none(UserDomains.domain_id == domain_id, UserDomains.user == user_id)
+        if not domain:
+            raise HTTPException(status_code=404, detail="Domain not found for the given user")
+
+        # Prepare the domain details
+        domain_details = {
+            "domain_id": domain.domain_id,
+            "domain": domain.domain,
+            "subdomain": domain.subdomain,
+            "custom_spf": domain.custom_spf,
+            "dns_records": domain.dns_records,
+            "mailbox_count": Mailbox.select().where(Mailbox.domain == domain).count(),
+            "created_at": domain.created_at,
+        }
+
+        return {
+            "message": "Domain record retrieved successfully.",
+            "domain": domain_details,
+        }
+
+    except Exception as e:
+        print(f"Error fetching domain by ID: {e}")
         raise HTTPException(status_code=500, detail=str(e))
