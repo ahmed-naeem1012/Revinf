@@ -151,6 +151,44 @@ def associate_ip_with_domain(domain_id: int, ip: str):
         raise HTTPException(status_code=500, detail=f"Error associating IP: {e}")
     
 
+@router_user.get("/check-domain-authentication/{domain_id}")
+async def check_domain_authentication(domain_id: str):
+    """
+    Check if a domain is authenticated with SendGrid.
+    
+    Args:
+        domain_id (str): The domain ID to check.
+
+    Returns:
+        dict: Authentication status of the domain.
+    """
+    headers = {
+        "Authorization": f"Bearer {SENDGRID_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        # Make a request to SendGrid's API
+        response = requests.get(f"https://api.sendgrid.com/v3/whitelabel/domains/{domain_id}", headers=headers)
+        
+        # Check the status code and handle errors
+        if response.status_code == 200:
+            data = response.json()
+            print(data)
+            return {
+                "domain_id": domain_id,
+                "authenticated": data.get("valid", False),
+                "domain": data.get("domain", "N/A")
+            }
+        elif response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Domain ID not found")
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.json().get("errors", "Unknown error"))
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    
+
 
 def validate_whitelabel_domain(domain_id: str):
     """
