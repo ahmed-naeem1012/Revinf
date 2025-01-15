@@ -581,7 +581,8 @@ async def create_whitelabel(request: DomainAuthRequest, user_id: int = Header(..
 @router_user.get("/user/domains")
 async def get_user_whitelabel_domains(user_id: int = Header(...), userserver_id: int = Header(...)):
     """
-    Fetch all whitelabel domain information for the given user ID and associated UserServer.
+    Fetch all whitelabel domain information for the given user ID and associated UserServer,
+    including validation status from SendGrid.
     """
     try:
         # Validate the user_id
@@ -603,24 +604,54 @@ async def get_user_whitelabel_domains(user_id: int = Header(...), userserver_id:
                 "domains": []
             }
 
-        # Prepare response
-        domains_list = [
-            {
+        # Fetch all authenticated domains from SendGrid
+        sendgrid_url = "https://api.sendgrid.com/v3/whitelabel/domains"
+        headers = {
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        sendgrid_response = requests.get(sendgrid_url, headers=headers)
+
+        if sendgrid_response.status_code != 200:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to fetch authenticated domains from SendGrid"
+            )
+
+        sendgrid_domains = sendgrid_response.json()
+
+        # Map SendGrid domains for quick lookup
+        sendgrid_domains_map = {
+            domain["domain"]: domain for domain in sendgrid_domains
+        }
+
+        # Match and validate user domains
+        domains_list = []
+        for domain in user_domains:
+            sendgrid_domain = sendgrid_domains_map.get(domain.domain)
+            is_valid = sendgrid_domain.get("valid", False) if sendgrid_domain else False
+
+            # Mark the domain validity in the database
+            domain.is_valid = is_valid
+            domain.save()
+
+            # Append domain info to the list
+            domains_list.append({
                 "domain_id": domain.domain_id,
                 "domain": domain.domain,
                 "subdomain": domain.subdomain,
                 "custom_spf": domain.custom_spf,
-                "dns_records": domain.dns_records,
+                "dns_records": sendgrid_domain.get('dns') if sendgrid_domain else False,
                 "mailbox_count": Mailbox.select().where(Mailbox.domain == domain).count(),
-                "created_at": domain.created_at
-            }
-            for domain in user_domains
-        ]
+                "created_at": domain.created_at,
+                "is_valid": is_valid
+            })
 
         return {
             "message": "Whitelabel domains retrieved successfully.",
             "domains": domains_list
         }
+
     except Exception as e:
         print(f"Error fetching user whitelabel domains: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1121,48 +1152,60 @@ async def get_valid_user_domains(user_id: int = Header(...), userserver_id: int 
         if not user_server:
             raise HTTPException(status_code=404, detail="UserServer not found for the given user")
 
-        # Fetch all domains associated with the given UserServer
+        # Fetch domains associated with the given UserServer
         user_domains = UserDomains.select().where(UserDomains.server_id == userserver_id)
-
-        # Check if the UserServer has any associated domains
         if not user_domains.exists():
             return {
                 "message": "No valid domains found for the provided UserServer.",
                 "domains": []
             }
 
+        # Fetch all authenticated domains from SendGrid
+        sendgrid_url = "https://api.sendgrid.com/v3/whitelabel/domains"
+        headers = {
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        sendgrid_response = requests.get(sendgrid_url, headers=headers)
+
+        if sendgrid_response.status_code != 200:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to fetch authenticated domains from SendGrid"
+            )
+
+        sendgrid_domains = sendgrid_response.json()
+
+        # Map SendGrid domains for quick lookup
+        sendgrid_domains_map = {
+            domain["domain"]: domain for domain in sendgrid_domains
+        }
+
+        # Match and validate user domains
         valid_domains_list = []
-
         for domain in user_domains:
-            # Validate domain using the validate_domain_whitelabel endpoint
-            try:
-                validate_url = f"https://api.sendgrid.com/v3/whitelabel/domains/{domain.domain_id}/validate"
-                headers = {
-                    "Authorization": f"Bearer {SENDGRID_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-                response = requests.post(validate_url, headers=headers)
-
-                if response.status_code == 200:
-                    validation_result = response.json()
-                    if validation_result.get("valid", False):
-                        # If the domain is valid, add to the list
-                        valid_domains_list.append({
-                            "domain_id": domain.domain_id,
-                            "domain": domain.domain,
-                            "subdomain": domain.subdomain,
-                            "custom_spf": domain.custom_spf,
-                            "dns_records": domain.dns_records,
-                            "mailbox_count": Mailbox.select().where(Mailbox.domain == domain).count(),
-                            "created_at": domain.created_at
-                        })
-            except Exception as e:
-                print(f"Error validating domain {domain.domain_id}: {e}")
+            sendgrid_domain = sendgrid_domains_map.get(domain.domain)
+            if sendgrid_domain and sendgrid_domain.get("valid", False):
+                valid_domains_list.append({
+                    "domain_id": domain.domain_id,
+                    "domain": domain.domain,
+                    "subdomain": domain.subdomain,
+                    "custom_spf": domain.custom_spf,
+                    "dns_records": domain.dns_records,
+                    "mailbox_count": Mailbox.select().where(Mailbox.domain == domain).count(),
+                    "created_at": domain.created_at
+                })
+            else:
+                # Mark domain as invalid if not authenticated
+                domain.is_valid = False
+                domain.save()
 
         return {
             "message": "Valid whitelabel domains retrieved successfully.",
             "domains": valid_domains_list
         }
+
     except Exception as e:
         print(f"Error fetching valid user domains: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
