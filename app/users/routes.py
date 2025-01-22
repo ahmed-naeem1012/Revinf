@@ -1,9 +1,11 @@
 from sqlite3 import IntegrityError
-from fastapi import FastAPI, APIRouter,Header, HTTPException, Depends
+from fastapi import FastAPI, APIRouter,Header, HTTPException, Depends,  Response
 from app.config.security import get_current_user
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 import random
 from fastapi_mail import ConnectionConfig
+import csv
+from io import StringIO
 import os
 from dotenv import load_dotenv
 import sendgrid
@@ -646,6 +648,8 @@ async def get_user_whitelabel_domains(user_id: int = Header(...), userserver_id:
                 "created_at": domain.created_at,
                 "is_valid": is_valid
             })
+            
+            print('Kabsa' , domains_list)
 
         return {
             "message": "Whitelabel domains retrieved successfully.",
@@ -1208,4 +1212,84 @@ async def get_valid_user_domains(user_id: int = Header(...), userserver_id: int 
     except Exception as e:
         print(f"Error fetching valid user domains: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+@router_user.get("/export-verified-senders")
+def export_verified_senders():
+    # Fetch the list of verified senders from SendGrid
+    headers = {
+        "Authorization": f"Bearer {SENDGRID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    response = requests.get('https://api.sendgrid.com/v3/verified_senders', headers=headers)
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Error fetching data from SendGrid: {response.text}",
+        )
+
+    # Parse and filter for verified senders
+    verified_senders = response.json().get('results' , [])
+    print( 'Semerjda  ', verified_senders)
+    filtered_senders = [
+        sender for sender in verified_senders if sender.get("verified", {}) is True
+    ]
+
+    if not filtered_senders:
+        raise HTTPException(
+            status_code=404, detail="No verified senders found in SendGrid."
+        )
+
+    # Define CSV structure with original columns
+    csv_columns = [
+        "from_name", "from_email", "user_name", "password", "smtp_host", "smtp_port",
+        "imap_host", "imap_port", "max_email_per_day", "custom_tracking_url", 
+        "warmup_enabled", "total_warmup_per_day", "daily_rampup", "reply_rate_percentage", 
+        "bcc", "signature", "different_reply_to_address", "imap_user_name", "imap_password"
+    ]
+
+    # Default values for fields not available in SendGrid response
+    smtp_port = 465
+    imap_host = "imap.elbowtitle.com"
+    imap_port = 993
+    max_email_per_day = 100
+    custom_tracking_url = None
+    warmup_enabled = False
+    total_warmup_per_day = 0
+    daily_rampup = 0
+    reply_rate_percentage = 0
+    bcc = None
+    signature = None
+    different_reply_to_address = 'lucasallara@helloonrampfundssolutions.com'
+
+    # Create CSV content
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=csv_columns)
+    writer.writeheader()
+    for sender in filtered_senders:
+        writer.writerow({
+            "from_name": sender['from_name'],
+            "from_email": sender["from_email"],
+            "user_name": "apikey",
+            "password": SENDGRID_API_KEY,
+            "smtp_host": "smtp.sendgrid.net",
+            "smtp_port": smtp_port,
+            "imap_host": imap_host,
+            "imap_port": imap_port,
+            "max_email_per_day": max_email_per_day,
+            "custom_tracking_url": custom_tracking_url,
+            "warmup_enabled": warmup_enabled,
+            "total_warmup_per_day": total_warmup_per_day,
+            "daily_rampup": daily_rampup,
+            "reply_rate_percentage": reply_rate_percentage,
+            "bcc": bcc,
+            "signature": signature,
+            "different_reply_to_address": different_reply_to_address,
+            "imap_user_name": "lucasallara@helloonrampfundssolutions.com",
+            "imap_password": '0m11RZ90qiZ9',
+        })
+
+    # Return CSV as response
+    response = Response(content=output.getvalue(), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=verified_senders.csv"
+    return response
 
